@@ -177,6 +177,7 @@ async def main():
     can_continue = True
     try: 
         # startup tasks startup and clearing the display, connecting to wifi
+        # Pin(20, Pin.OUT).value(1)  # Turn on the backlight
         for c in [0x38, 0x08, 0x01, 0x06, 0x0C]:
             send_cmd(c)
             await asyncio.sleep_ms(5)
