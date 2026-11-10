@@ -28,11 +28,12 @@ piicodev = {
     "sda": 8,
     "scl": 9,
     "lcd_address": 0x3C,
+    "processor": 0
 }
 
 # used functions and code
 i2cdisplay = I2C(lcd["processor"], scl=Pin(lcd["scl"]), sda=Pin(lcd["sda"]), freq=400000)
-piicodevdisplay = create_PiicoDev_SSD1306(bus=0, freq=400000,scl=Pin(piicodev["scl"]), sda=Pin(piicodev["sda"])) # type: ignore
+piicodevdisplay = create_PiicoDev_SSD1306(bus=piicodev["processor"], freq=400000,scl=Pin(piicodev["scl"]), sda=Pin(piicodev["sda"])) # type: ignore
 # cycle = [0]
 
 state = {
@@ -56,17 +57,18 @@ def write_lcd_display(line1, line2):
     for char in line2:
         send_data(ord(char))
 
-def get(url): 
+async def get(url): 
     response = None
     data = None
     usable = False
     try:
         # 1. Send the GET request
-        response = urequests.get(url, timeout=5)  # Set a timeout of 5 seconds
+        response =  urequests.get(url, timeout=5)  # Set a timeout of 5 seconds
         
         # 2. Parse the response as JSON (returns a Python dictionary)
         if response.status_code == 200:
             data = response.json()
+            usable = True
         else:
             print(f"Error: Received status code {response.status_code}")
             data = None
@@ -76,7 +78,6 @@ def get(url):
 
     else: 
         print(data)
-        usable = True
 
     finally:
         # 4. Always close the response object to free up socket memory
@@ -88,7 +89,7 @@ def get(url):
 
 async def fetch_data():
     while True:
-        data = get(fronius_ip + '/solar_api/v1/GetPowerFlowRealtimeData.fcgi')
+        data = await get(fronius_ip + '/solar_api/v1/GetPowerFlowRealtimeData.fcgi')
         if len(data) < 2 or data[0] is False or data[1] is None: 
             pass
         elif data[0] and data[1] is not None and data[1].get('Body', {}).get('Data', {}).get('Version', 0) == "12": 
@@ -104,21 +105,19 @@ async def fetch_data():
             }
         await asyncio.sleep(30)
 
-def get_vsys_voltage():
+async def get_vsys_voltage():
     # 1. Enable VSYS sense line (required for Pico W / Pico 2 W)
-    pin25 = Pin(25, Pin.OUT, pull=Pin.PULL_DOWN)
-    pin25.high()
+    pin25 = Pin(25, Pin.OUT, value=1)
+    Pin(29, Pin.IN, pull=None)  # Ensure GPIO 29 is set to input mode before reading ADC
+    await asyncio.sleep(0.01)  # Short delay to allow the pin state to stabilize
+    adc = ADC(3)
     
-    # 2. Read ADC channel 3 on GPIO 29
-    Pin(29, Pin.IN)
-    vsys_adc = ADC(3)
-    raw_val = vsys_adc.read_u16()
-    
-    # 3. Restore GPIO 29 for CYW43 Wi-Fi module
-    Pin(29, Pin.ALT, pull=Pin.PULL_DOWN, alt=7)
     
     # Convert raw ADC value to voltage across 1:3 divider
-    return (raw_val * 3.3 / 65535) * 3
+    value = (adc.read_u16() *3.3) / 65535 * 3
+    # 3. Restore GPIO 29 for CYW43 Wi-Fi module
+    Pin(29, Pin.ALT, pull=Pin.PULL_DOWN, alt=7)
+    return value
 
 
 async def ensure_wifi():
@@ -155,7 +154,7 @@ async def display_lcd():
             if not await ensure_wifi():
                 await asyncio.sleep(5)  # Pause before trying again
                 continue  # Skip displaying stats until reconnected
-        current_vsys = get_vsys_voltage()
+        current_vsys = await get_vsys_voltage()
         write_lcd_display("Current V:" + str(current_vsys), "USB Power" if current_vsys > 4.65 else "Battery Power")
         await asyncio.sleep(delay)
         if current_vsys < 4.65: 
@@ -209,7 +208,7 @@ async def main():
             await asyncio.sleep(2)
 
         while not wlan.isconnected(): # blocks execution until the device is connected to Wi-Fi
-            time.sleep(1)
+            await asyncio.sleep(1)
 
         write_lcd_display("Wi-Fi Connected", wlan.ifconfig()[0])  # Display the IP address
         piicodevdisplay.fill(0)
